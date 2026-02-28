@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CROWD — Социальный Рогалик (Module Architecture)</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+  <canvas id="c"></canvas>
+  <div class="vignette"></div>
+
+  <!-- NAME MODAL -->
+  <div id="name-modal">
+    <div class="nm-card">
+      <div class="nm-title">АВТОРИЗАЦИЯ</div>
+      <input type="text" id="name-input" class="nm-input" placeholder="Введите имя..." maxlength="12"
+        autocomplete="off" />
+      <button class="mbtn" id="btnSaveName">ПРИНЯТЬ</button>
+    </div>
+  </div>
+
+  <!-- MENU -->
+  <div id="menu">
+    <div class="metro-wrap">
+      <div class="metro-doors">
+        <div class="door left" id="dL"></div>
+        <div class="door right" id="dR"></div>
+      </div>
+      <div class="menu-inner">
+        <div class="brand">
+          <div class="brand-title">CROWD</div>
+          <div class="brand-sub">СОЦИАЛЬНЫЙ РОГАЛИК</div>
+        </div>
+        <div class="mbtn-group">
+          <button class="mbtn" id="btnPlay">▶ &nbsp; ВОЙТИ В ТОЛПУ</button>
+          <button class="mbtn ghost" id="btnExit">ВЫЙТИ</button>
+        </div>
+      </div>
+      <div class="metro-label">ПРОБЕЛ / ENTER ИЛИ НАЖМИТЕ</div>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div id="score-box">ДИСТАНЦИЯ &nbsp;<span id="distVal">0</span>М</div>
+
+    <div id="peri-box">
+      <div class="peri-row">GAMEPAD <div class="peri-dot off" id="pdGP"></div>
+      </div>
+      <div class="peri-row">KEYBOARD <div class="peri-dot on" id="pdKB"></div>
+      </div>
+    </div>
+
+    <div id="combo-box">
+      <div class="combo-label">КОМБО — ПОМОЩЬ</div>
+      <div class="combo-keys">
+        <div class="ckey" id="ck0">X</div>
+        <div class="ckey" id="ck1">X</div>
+        <div class="ckey" id="ck2">Y</div>
+      </div>
+    </div>
+
+    <div id="ctrl-hint">WASD / ↑↓←→ · ДВОЙНОЙ TAP = РЫВОК · Z Z X = ПРИНЯТЬ ПОМОЩЬ</div>
+  </div>
+
+  <div id="action-hint"></div>
+  <div id="danger-flash"></div>
+
+  <!-- GAME OVER - SPLIT SCREEN -->
+  <div id="gameover">
+    <div class="go-half top">
+      <div class="go-content-top">
+        <div class="go-title">ПОГЛОЩЁН</div>
+        <div class="go-stats-row highlight">РЕЗУЛЬТАТ — <span id="goDistVal">0</span></div>
+        <div class="go-stats-row" id="goRecordLabel" style="display:none; color: var(--green);">НОВЫЙ РЕКОРД!</div>
+        <div class="go-stats-row">ЛУЧШИЙ РЕЗУЛЬТАТ (<span id="goName">ИГРОК</span>) — <span id="goBestVal">0</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="go-half bottom">
+      <div class="go-content-bottom">
+        <div class="go-stats-row">ЭФФЕКТИВНОСТЬ (GPA): <span id="goEffVal">0.00</span></div>
+        <div class="go-breakdown" id="goBreakdown">
+          <!-- JS inserts breakdown here -->
+        </div>
+        <button class="mbtn distort-btn" id="btnRestart">
+          <span class="btn-text">↺ &nbsp; СНОВА</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Entry -->
+  <script type="module" src="js/main.js"></script>
+
+</body>
+
+</html>

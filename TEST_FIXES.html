@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CROWD - Fix Verification Test</title>
+</head>
+<body>
+    <h2>CROWD Game - Fix Verification</h2>
+    <p>Open DevTools Console (F12) to see test results.</p>
+    <iframe src="http://localhost:3000" width="100%" height="800" title="Game"></iframe>
+    
+    <script>
+        // Wait for frame to load, then expose test suite
+        setTimeout(() => {
+            console.log('%c═══════════════════════════════════════════', 'color: #0f0; font-weight: bold;');
+            console.log('%c✓ THREE FIXES APPLIED:', 'color: #0f0; font-weight: bold;');
+            console.log('%c├─ FIX #1: views.state[9]=1 before alive=false (silent death → notification)', 'color: #0ff;');
+            console.log('%c├─ FIX #2: Stagnation threshold 0.5s → 3.0s (Phase 1) → 6.0s (Phase 2)', 'color: #0ff;');
+            console.log('%c└─ FIX #3: Magnetism force ×8 + drift compensation (0.28*8 + c.spd*0.85)', 'color: #0ff;');
+            console.log('%c═══════════════════════════════════════════', 'color: #0f0; font-weight: bold;');
+            console.log('%cTEST PROCEDURE:', 'color: #fa0; font-weight: bold;');
+            console.log('1. Enter game (press ENTER)');
+            console.log('2. DON\'T PRESS ANY KEYS - just watch');
+            console.log('3. Wait 3 seconds → You should see "Magnetism PHASE 1 Charging..." in logs');
+            console.log('4. Wait 6 seconds total → You should see "Magnetism PHASE 2 FULL PULL ACTIVE"');
+            console.log('5. Crowd should visibly magnetize around you');
+            console.log('6. Play 15+ seconds idle → Game should end with "GAME OVER Encircled" (not freeze)');
+            console.log('%c═══════════════════════════════════════════', 'color: #0f0; font-weight: bold;');
+        }, 1000);
+    </script>
+</body>
+</html>
