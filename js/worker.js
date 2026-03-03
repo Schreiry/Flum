@@ -1,5 +1,5 @@
 import { CROWD_N, MAX_ENEMIES, MAX_HELPERS, ACTIVE_R, MAX_BLOCKERS, MAX_SLOWERS } from './config.js';
-import { CROWD, PLAYER } from './config.js';  // Import for encirclement mechanics
+import { CROWD, PLAYER, INVERSION } from './config.js';  // Import for encirclement & inversion mechanics
 import { createView } from './memory-layout.js';
 import { composeMatrix } from './math.js';
 
@@ -29,6 +29,30 @@ let workerTime = 0;
 
 // Encirclement tracking (crowd magnetism mechanic)
 let encircledTime = 0;  // Accumulates when player is surrounded 360°
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FSM STATE MACHINE (Inversion Concept)
+// ═══════════════════════════════════════════════════════════════════════════
+// GAME_STATE: 0=NORMAL, 1=ENCIRCLING, 2=TRANSITIONING, 3=INVERTED, 4=RETURNING
+let gameMode = 0;              // Current FSM state
+let stateModeTime = 0;         // Elapsed time in current state
+let ringsFormed = 0;           // 0-3: how many concentric rings formed
+let ringsReady = false;        // true when 3 rings completely formed
+let ringFormationStartTime = 0; // When current ring formation started
+
+// Hermit system (відщепенець - enemies in inverted mode)
+let hermitActive = false;      // Is there an active hermit spawned?
+let hermitX = 0, hermitZ = 0;  // Hermit position
+let hermitLifetime = 0;        // Time until hermit disappears
+let hermitSpeed = 0;           // Current hermit velocity
+let hermitAngle = 0;           // Direction hermit is moving
+let hermitsCollected = 0;      // 0-3: how many caught in current inversion
+let distanceSinceLastHermit = 0; // Track distance for spawn intervals
+let hermitWavePending = 0;     // How many hermits left in current spawn wave
+let hermitWaveCooldown = 0;    // Delay before next hermit in wave
+
+// Ring membership tracking (members moving to form circles)
+let ringMembers = [];          // Array of {idx, ringIndex, targetAngle, hasReached}
 
     let maxDist = 0;
 let spawnCd = 5.0;
@@ -190,6 +214,12 @@ for (let i = 0; i < CROWD_N; i++) {
         phase: Math.random() * Math.PI * 2,
         rot: Math.random() * Math.PI * 2,
         active: false,
+        // Ring formation fields (for inversion mode)
+        isRingMember: false,    // Currently assigned to a ring
+        ringIndex: -1,          // Which ring (0=1st, 1=2nd, 2=3rd)
+        ringTargetX: 0,         // Target X position in ring
+        ringTargetZ: 0,         // Target Z position in ring
+        ringReached: false,     // Has this member reached target
     });
 }
 for (let i = 0; i < MAX_ENEMIES; i++) enemies.push({ active: false, cx: 0, cz: 0, spd: 0, phase: 0, meshes: [] });
@@ -275,6 +305,271 @@ function getSpatialNeighbors(cx, cz, radius) {
     return result;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FSM HELPER FUNCTIONS (Inversion System)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Initialize ring members for encircling phase
+function initializeRingFormation() {
+    ringMembers = [];
+    ringsFormed = 0;
+    ringsReady = false;
+    ringFormationStartTime = workerTime;
+    
+    // Find available crowd members for rings
+    const ringCounts = [
+        Math.floor(INVERSION.RING_MIN_COUNT + Math.random() * (INVERSION.RING_MAX_COUNT - INVERSION.RING_MIN_COUNT)),
+        Math.floor(INVERSION.RING_MIN_COUNT + Math.random() * (INVERSION.RING_MAX_COUNT - INVERSION.RING_MIN_COUNT)),
+        Math.floor(INVERSION.RING_MIN_COUNT + Math.random() * (INVERSION.RING_MAX_COUNT - INVERSION.RING_MIN_COUNT)),
+    ];
+    
+    let memberIdx = 0;
+    for (let ringIdx = 0; ringIdx < 3; ringIdx++) {
+        const count = ringCounts[ringIdx];
+        for (let i = 0; i < count && memberIdx < CROWD_N; i++) {
+            const c = crowdData[memberIdx];
+            const angle = (i / count) * Math.PI * 2;
+            const radius = [INVERSION.RING_1_RADIUS, INVERSION.RING_2_RADIUS, INVERSION.RING_3_RADIUS][ringIdx];
+            
+            c.isRingMember = true;
+            c.ringIndex = ringIdx;
+            c.ringTargetX = px + Math.cos(angle) * radius;
+            c.ringTargetZ = pz + Math.sin(angle) * radius;
+            c.ringReached = false;
+            
+            ringMembers.push(memberIdx);
+            memberIdx++;
+        }
+    }
+    
+    logDiag('Ring Formation Initialized', { memberCount: ringMembers.length, rings: ringsFormed }, 'INFO');
+}
+
+// Check if ring formation is complete
+function checkRingFormationComplete() {
+    if (ringsReady) return true;
+    
+    // Count rings that have formed
+    let formedRings = 0;
+    for (let ringIdx = 0; ringIdx < 3; ringIdx++) {
+        let allReached = true;
+        for (const memberIdx of ringMembers) {
+            const c = crowdData[memberIdx];
+            if (c.ringIndex === ringIdx) {
+                const dx = c.ringTargetX - c.x;
+                const dz = c.ringTargetZ - c.z;
+                const dist2 = dx * dx + dz * dz;
+                if (dist2 > 0.25) {  // If any member hasn't reached target
+                    allReached = false;
+                    break;
+                }
+            }
+        }
+        if (allReached) formedRings++;
+    }
+    
+    ringsFormed = formedRings;
+    // Trigger transition when FIRST ring is complete (достаточно одного кольца!)
+    if (ringsFormed >= 1) {
+        ringsReady = true;
+        logDiag('First Ring Formed', { time: stateModeTime.toFixed(2), readyForTransition: true }, 'INFO');
+        return true;
+    }
+    return false;
+}
+
+// Spawn a hermit (отщепенец) in random position
+function spawnHermit() {
+    if (hermitActive) return;  // Only one at a time
+    
+    // Spawn at distance from player
+    const angle = Math.random() * Math.PI * 2;
+    const dist = INVERSION.HERMIT_SPAWN_MIN_DIST + Math.random() * (INVERSION.HERMIT_SPAWN_MAX_DIST - INVERSION.HERMIT_SPAWN_MIN_DIST);
+    
+    hermitX = px + Math.cos(angle) * dist;
+    hermitZ = pz + Math.sin(angle) * dist;
+    hermitLifetime = INVERSION.HERMIT_LIFETIME;
+    hermitActive = true;
+    hermitAngle = Math.random() * Math.PI * 2;
+    hermitSpeed = INVERSION.HERMIT_SPEED_MULT;
+    
+    logDiag('Hermit Spawned', { x: hermitX.toFixed(1), z: hermitZ.toFixed(1), pending: hermitWavePending - 1 }, 'INFO');
+}
+
+// Tick functions for different FSM states
+function tickNormal(dt) {
+    // Все обычно, как было. encircledTime уже отслеживается в основном tick.
+    // Если магнетизм → смена в ENCIRCLING происходит в основном физ-tick.
+}
+
+function tickEncircling(dt) {
+    // Формировать кольца
+    if (ringMembers.length === 0) {
+        initializeRingFormation();
+    }
+    
+    // Move ring members towards their target positions
+    for (const memberIdx of ringMembers) {
+        const c = crowdData[memberIdx];
+        const dx = c.ringTargetX - c.x;
+        const dz = c.ringTargetZ - c.z;
+        const dist2 = dx * dx + dz * dz;
+        
+        if (dist2 > 0.01) {
+            const dist = Math.sqrt(dist2);
+            const moveSpeed = 2.5 * dt;  // Ring members move faster to form ring
+            const moveX = (dx / dist) * moveSpeed;
+            const moveZ = (dz / dist) * moveSpeed;
+            
+            c.x += moveX;
+            c.z += moveZ;
+        } else {
+            c.ringReached = true;
+        }
+    }
+    
+    // Check if all rings formed
+    if (checkRingFormationComplete()) {
+        // Trigger transition to TRANSITIONING state
+        gameMode = 2;  // TRANSITIONING
+        stateModeTime = 0;
+        logDiag('FSM Transition', { from: 1, to: 2, event: 'ringsComplete' }, 'INFO');
+    }
+}
+
+function tickTransitioning(dt) {
+    stateModeTime += dt;
+    
+    // Screen shake + color fade (linear progress 0→1)
+    const transitionValue = Math.min(1.0, stateModeTime / INVERSION.TRANSITION_DURATION);
+    views.state[24] = transitionValue * INVERSION.SHAKE_AMPLITUDE;  // shake intensity
+    views.state[25] = transitionValue;  // color blend to inverted
+    
+    if (transitionValue >= 1.0) {
+        // Enter INVERTED mode
+        gameMode = 3;  // INVERTED
+        stateModeTime = 0;
+        hermitsCollected = 0;
+        distanceSinceLastHermit = 0;
+        hermitWavePending = INVERSION.HERMIT_PER_WAVE;
+        hermitWaveCooldown = 0;
+        
+        // Change crowd behavior to move WITH player instead of against
+        // This will be handled in the main physics loop based on gameMode
+        
+        logDiag('FSM Transition', { from: 2, to: 3, event: 'transitionComplete' }, 'INFO');
+    }
+}
+
+function tickInverted(dt) {
+    stateModeTime += dt;
+    
+    // In inverted mode, crowd moves WITH player (same direction)
+    // This is handled in main physics loop based on gameMode
+    
+    // Update distance tracking for hermit spawning
+    const playerSpeed = Math.sqrt(vx * vx + vz * vz);
+    distanceSinceLastHermit += playerSpeed * dt;
+    
+    // Spawn hermits at intervals
+    hermitWaveCooldown -= dt;
+    if (distanceSinceLastHermit >= INVERSION.HERMIT_SPAWN_INTERVAL_M && hermitWavePending > 0 && hermitWaveCooldown <= 0) {
+        spawnHermit();
+        hermitWavePending--;
+        hermitWaveCooldown = 0.5;  // Delay before next hermit in wave
+        distanceSinceLastHermit = 0;
+    }
+    
+    // Update active hermit
+    if (hermitActive) {
+        hermitLifetime -= dt;
+        
+        // Hermit AI: random wandering / fleeing from player
+        const dpx = px - hermitX;
+        const dpz = pz - hermitZ;
+        const playerDist2 = dpx * dpx + dpz * dpz;
+        
+        // Move away from player if close
+        if (playerDist2 < 36) {  // 6 units
+            hermitAngle += (Math.random() - 0.5) * 0.5;  // Jitter angle
+        } else {
+            hermitAngle += (Math.random() - 0.5) * 0.1;  // Slow wander
+        }
+        
+        hermitX += Math.cos(hermitAngle) * hermitSpeed * dt;
+        hermitZ += Math.sin(hermitAngle) * hermitSpeed * dt;
+        
+        // Check collection (catch radius)
+        const catchDx = hermitX - px;
+        const catchDz = hermitZ - pz;
+        const catchDist2 = catchDx * catchDx + catchDz * catchDz;
+        
+        if (catchDist2 < INVERSION.HERMIT_CATCH_RADIUS * INVERSION.HERMIT_CATCH_RADIUS) {
+            hermitsCollected++;
+            hermitActive = false;
+            views.state[20] = hermitsCollected;  // Update counter in SAB
+            
+            logDiag('Hermit Caught', { count: hermitsCollected, needed: INVERSION.HERMITS_TO_RETURN }, 'INFO');
+            
+            // Check if we've caught enough to return
+            if (hermitsCollected >= INVERSION.HERMITS_TO_RETURN) {
+                gameMode = 4;  // RETURNING
+                stateModeTime = 0;
+                logDiag('FSM Transition', { from: 3, to: 4, event: 'hermitsCollected' }, 'INFO');
+            }
+        }
+        
+        // Despawn if lifetime exceeded
+        if (hermitLifetime <= 0) {
+            hermitActive = false;
+        }
+    }
+    
+    // Keep shake active in inverted mode  (subtle vibration)
+    views.state[24] = 0.05;  // Subtle shake
+    views.state[25] = 1.0;   // Full inverted colors
+}
+
+function tickReturning(dt) {
+    stateModeTime += dt;
+    
+    // Reverse transition: fade back from inverted to normal
+    const returnProgress = Math.min(1.0, stateModeTime / INVERSION.TRANSITION_DURATION);
+    const returnValue = 1.0 - returnProgress;  // Fade out inverted effect
+    
+    views.state[24] = returnValue * INVERSION.SHAKE_AMPLITUDE;  // Fade shake
+    views.state[25] = returnValue;  // Fade color blend
+    
+    if (returnProgress >= 1.0) {
+        // Return to NORMAL mode
+        gameMode = 0;  // NORMAL
+        stateModeTime = 0;
+        encircledTime = 0;  // Reset encirclement timer
+        
+        // Clear ring members
+        for (const memberIdx of ringMembers) {
+            const c = crowdData[memberIdx];
+            c.isRingMember = false;
+            c.ringIndex = -1;
+            c.ringReached = false;
+        }
+        ringMembers = [];
+        ringsFormed = 0;
+        ringsReady = false;
+        
+        // Clear any active hermit
+        hermitActive = false;
+        hermitsCollected = 0;
+        
+        // Reset SAB state
+        views.state[20] = 0;  // hermitsCollected
+        views.state[24] = 0;  // shake
+        views.state[25] = 0;  // color blend
+        
+        logDiag('FSM Transition', { from: 4, to: 0, event: 'returningComplete' }, 'INFO');
+    }
+}
+
 function resetGame() {
     px = 0; pz = 0;
     vx = 0; vz = 0;
@@ -290,10 +585,26 @@ function resetGame() {
     encircledTime = 0;  // Reset encirclement timer on game restart
     stagnationTime = 0;  // Reset stagnation timer (FIX #3)
     maxDist = 0; spawnCd = 5.0; spawnT = 4.0;
+    
+    // Reset FSM state
+    gameMode = 0;
+    stateModeTime = 0;
+    ringsFormed = 0;
+    ringsReady = false;
+    ringMembers = [];
+    hermitActive = false;
+    hermitsCollected = 0;
+    distanceSinceLastHermit = 0;
 
     crowdData.forEach(c => {
         c.x = (Math.random() - 0.5) * 400;
         c.z = (Math.random() - 0.5) * 14;
+        // Reset ring fields
+        c.isRingMember = false;
+        c.ringIndex = -1;
+        c.ringTargetX = 0;
+        c.ringTargetZ = 0;
+        c.ringReached = false;
     });
     enemies.forEach(e => e.active = false);
     helpers.forEach(h => h.active = false);
@@ -306,6 +617,17 @@ function resetGame() {
     if (views.helperVars) views.helperVars.fill(0);
     if (views.blockerVars) views.blockerVars.fill(0);
     if (views.slowerVars) views.slowerVars.fill(0);
+    
+    // Clear FSM SAB state
+    views.state[17] = 0;  // gameMode
+    views.state[18] = 0;  // transitionProgress
+    views.state[19] = 0;  // ringsFormed
+    views.state[20] = 0;  // hermitsCollected
+    views.state[21] = 0;  // hermitActive
+    views.state[22] = 0;  // hermitX
+    views.state[23] = 0;  // hermitZ
+    views.state[24] = 0;  // shakeIntensity
+    views.state[25] = 0;  // colorBlend
 }
 
 // Spawners using objects arrays to avoid GC
@@ -492,13 +814,11 @@ function tick(dt, time, ix, iz, dashX, dashZ, comboFired) {
     if (encirclement.surrounded) {
         encircledTime += dt;
         
-        // Game Over if encircled too long
-        // 🔴 CRITICAL FIX: Signal main thread BEFORE worker dies
-        if (encircledTime >= CROWD.ENCIRCLE_TIMEOUT) {
-            views.state[9] = 1;  // ✅ HIT FLAG - tell main.js about game over
-            alive = false;  // Trigger ПОГЛОЩЕН СТАГНАЦИЕЙ
-            logDiag('GAME OVER', { reason: 'Encircled', time: encircledTime.toFixed(2) }, 'ERROR');
-            return;
+        // FSM: Trigger ENCIRCLING mode if stagnant long enough
+        if (gameMode === 0 && encircledTime >= CROWD.ENCIRCLE_TIMEOUT && isStagnant) {
+            gameMode = 1;  // ENCIRCLING
+            stateModeTime = 0;
+            logDiag('FSM Transition', { from: 0, to: 1, event: 'encircledTooLong' }, 'INFO');
         }
     } else {
         // Decay timer when player breaks the ring (soft so brief gaps don't fully reset)
@@ -517,6 +837,32 @@ function tick(dt, time, ix, iz, dashX, dashZ, comboFired) {
         dashTimer = 0.22;
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // FSM STATE MACHINE: Update game mode and dispatch to appropriate handler
+    // ════════════════════════════════════════════════════════════════════════
+    stateModeTime += dt;
+    
+    // Dispatch to appropriate FSM tick function
+    if (gameMode === 1) {
+        tickEncircling(dt);
+    } else if (gameMode === 2) {
+        tickTransitioning(dt);
+    } else if (gameMode === 3) {
+        tickInverted(dt);
+    } else if (gameMode === 4) {
+        tickReturning(dt);
+    }
+    
+    // Update SAB with current FSM state
+    views.state[17] = gameMode;
+    views.state[18] = stateModeTime;  // transitional progress (used by renderer)
+    views.state[19] = ringsFormed;
+    views.state[20] = hermitsCollected;
+    views.state[21] = hermitActive ? 1 : 0;
+    views.state[22] = hermitX;
+    views.state[23] = hermitZ;
+    // states[24] & [25] already set by FSM functions (shake, colorBlend)
+
     let nearActive = 0;
     for (let i = 0; i < CROWD_N; i++) if (crowdData[i].active) nearActive++;
     
@@ -530,6 +876,11 @@ function tick(dt, time, ix, iz, dashX, dashZ, comboFired) {
     // This pressure multiplier makes it harder to leave the crowd when stationary
     
     let spd = 7.6 * baseResist * crowdPressure;
+    
+    // In INVERTED mode, player is significantly faster (part of the flow)
+    if (gameMode === 3) {
+        spd *= INVERSION.INVERTED_PLAYER_SPEED_MULT;  // 1.8× multiplier
+    }
 
     // Check collisions with SLOWERs
     for (let i = 0; i < MAX_SLOWERS; i++) {
@@ -639,11 +990,26 @@ function tick(dt, time, ix, iz, dashX, dashZ, comboFired) {
     for (let i = 0; i < CROWD_N; i++) {
         const c = crowdData[i];
         
-        // Base movement: all crowd members drift leftward
-        c.x -= c.spd;
-        if (c.x < px - 100) {
-            c.x = px + 150 + Math.random() * 50;
-            c.z = (Math.random() - 0.5) * 14;
+        // Base movement depends on game mode
+        // SKIP base movement for ring members (they move toward their targets instead)
+        if (!c.isRingMember) {
+            if (gameMode === 3 || gameMode === 4) {
+                // INVERTED or RETURNING: crowd moves WITH player (they flow together)
+                // Use speed multiplier from INVERSION config
+                const speedMult = INVERSION.INVERTED_CROWD_SPEED_MULT;
+                c.x += c.spd * speedMult;  // Move rightward with the player
+                if (c.x > px + 100) {
+                    c.x = px - 150 - Math.random() * 50;  // Respawn behind
+                    c.z = (Math.random() - 0.5) * 14;
+                }
+            } else {
+                // NORMAL, ENCIRCLING, TRANSITIONING: crowd drifts leftward (against player)
+                c.x -= c.spd;
+                if (c.x < px - 100) {
+                    c.x = px + 150 + Math.random() * 50;
+                    c.z = (Math.random() - 0.5) * 14;
+                }
+            }
         }
 
         const dx = c.x - px;
@@ -684,7 +1050,8 @@ function tick(dt, time, ix, iz, dashX, dashZ, comboFired) {
     // PASS 2: MAGNETIC ATTRACTION - Apply when STAGNANT (idle + no input)
     // ════════════════════════════════════════════════════════════════════════
     // Only trigger magnetism when player is stagnant (Phase 1+)
-    if (isStagnant) {
+    // SKIP in INVERTED mode (player is part of the collective, no magnetism)
+    if (isStagnant && gameMode !== 3 && gameMode !== 4) {
         const magneticRadius = CROWD.MAGNETIC_RADIUS;  // 7.0
         const comfortRadius = CROWD.MAGNETIC_COMFORT_RADIUS;  // 2.1
         

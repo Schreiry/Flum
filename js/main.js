@@ -6,6 +6,10 @@ import { TOTAL_BYTES, MEM_SZ, createView } from './memory-layout.js';
 
 let sab, floatArray, views, worker, combo, gpad, kb, renderer, playerDashFn;
 
+// FSM State tracking for UI updates
+let prevGameMode = 0;
+let prevHermitsCollected = 0;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // DIAGNOSTIC CONSOLE LOGGER (optimized, throttled output + FREEZE DETECTOR)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -213,6 +217,40 @@ function loop(ts) {
         hint('✓  СПАСЁН!', 2000);
     }
 
+    // ── FSM STATE MACHINE: Track mode transitions and update UI ──
+    const currentGameMode = views.state[17];  // 0=NORMAL, 1=ENCIRCLING, 2=TRANSITIONING, 3=INVERTED, 4=RETURNING
+    const currentHermitsCollected = views.state[20];
+    
+    // Detect FSM transitions and provide feedback
+    if (currentGameMode !== prevGameMode) {
+        if (currentGameMode === 1) {
+            // ENCIRCLING: rings forming
+            hint('⭕ КОЛЬЦА ФОРМИРУЮТСЯ...', 3000);
+        } else if (currentGameMode === 2) {
+            // TRANSITIONING: screen shaking
+            hint('✪ ПЕРЕХОД...', 2000);
+        } else if (currentGameMode === 3) {
+            // INVERTED: entered the inverted world
+            hint('⬛ ПОГЛОЩЁН ТОЛПОЙ — НАЙДИ ОТЩЕЛЬНИКА', 4000);
+            // Create/show hermit counter
+            ensureHermitCounterVisible();
+        } else if (currentGameMode === 4) {
+            // RETURNING: transitioning back to normal
+            hint('◻ ВОЗВРАЩЕНИЕ...', 2000);
+        } else if (currentGameMode === 0 && prevGameMode !== 0) {
+            // Back to NORMAL
+            hint('◻ ВЫРВАЛСЯ ИЗ ТОЛПЫ', 3000);
+            hideHermitCounter();
+        }
+        prevGameMode = currentGameMode;
+    }
+    
+    // Update hermit counter UI in INVERTED mode
+    if (currentGameMode === 3 && currentHermitsCollected !== prevHermitsCollected) {
+        updateHermitCounter(currentHermitsCollected);
+        prevHermitsCollected = currentHermitsCollected;
+    }
+
     renderer.render(dt);
 
     const scoreVal = document.getElementById('distVal');
@@ -228,8 +266,76 @@ function startSimulation() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TESTING API (exposed to console for manual testing)
+// HERMIT COUNTER UI HELPERS (for INVERTED mode)
 // ═══════════════════════════════════════════════════════════════════════════
+
+function ensureHermitCounterVisible() {
+    let hermitBox = document.getElementById('hermit-box');
+    
+    // Create if doesn't exist
+    if (!hermitBox) {
+        hermitBox = document.createElement('div');
+        hermitBox.id = 'hermit-box';
+        hermitBox.className = 'hermit-counter-box';
+        
+        // Style it to look similar to combo-box
+        hermitBox.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #ff6600;
+            border-radius: 4px;
+            padding: 12px 16px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #ff6600;
+            text-align: center;
+            z-index: 1000;
+            box-shadow: 0 0 10px rgba(255, 102, 0, 0.5);
+        `;
+        
+        hermitBox.innerHTML = 'ОТЩЕЛЬНИК<div id="hermit-counter" style="font-size: 24px; margin-top: 8px; font-weight: bold;">○ ○ ○</div>';
+        document.body.appendChild(hermitBox);
+    }
+    
+    hermitBox.style.display = 'block';
+}
+
+function updateHermitCounter(count) {
+    const counterEl = document.getElementById('hermit-counter');
+    if (!counterEl) return;
+    
+    // Display as filled (●) or empty (○) circles
+    // Max 3 hermits, so show 3 circles
+    const filled = Math.min(count, 3);
+    const empty = Math.max(0, 3 - filled);
+    
+    let display = '';
+    for (let i = 0; i < filled; i++) display += '● ';
+    for (let i = 0; i < empty; i++) display += '○ ';
+    
+    counterEl.textContent = display.trim();
+    
+    // Flash when a hermit is caught
+    if (count > 0) {
+        counterEl.style.animation = 'none';
+        setTimeout(() => {
+            counterEl.style.animation = 'pulse 0.3s ease-out';
+        }, 10);
+    }
+}
+
+function hideHermitCounter() {
+    const hermitBox = document.getElementById('hermit-box');
+    if (hermitBox) {
+        hermitBox.style.display = 'none';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TESTING API (exposed to console for manual testing)
+// ═════════════════════════════════════════════════════════════════════════════
 window.CrowdGameTest = {
     enableDiagnostics: () => {
         window.location.reload();

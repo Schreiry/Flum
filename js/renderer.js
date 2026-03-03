@@ -1,5 +1,5 @@
 import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
-import { PAL, CROWD_N, MAX_ENEMIES, MAX_HELPERS, MAX_BLOCKERS, MAX_SLOWERS, FH } from './config.js';
+import { PAL, CROWD_N, MAX_ENEMIES, MAX_HELPERS, MAX_BLOCKERS, MAX_SLOWERS, FH, INVERSION } from './config.js';
 import { createView } from './memory-layout.js';
 
 export class Renderer {
@@ -36,6 +36,7 @@ export class Renderer {
         this.initHelpers();
         this.initBlockers();
         this.initSlowers();
+        this.initHermit();
 
         // Camera target smooth follow variables
         this.bobPh = 0;
@@ -295,6 +296,41 @@ export class Renderer {
         this.scene.add(this.sBody, this.sHead);
     }
 
+    initHermit() {
+        // Hermit (отщепенец) — solitary figure that appears in inverted mode
+        // Rendered as a fast, orange-glowing figure
+        const geo = new THREE.CylinderGeometry(0.24, 0.04, 0.68, 16);
+        const headGeo = new THREE.SphereGeometry(0.20, 20, 16);
+        
+        const mat = new THREE.MeshStandardMaterial({
+            color: 0xff6600,  // Orange
+            roughness: 0.4,
+            metalness: 0.2,
+            emissive: 0xff6600,
+            emissiveIntensity: 1.2
+        });
+        
+        this.hermitBody = new THREE.Mesh(geo, mat);
+        this.hermitBody.castShadow = true;
+        this.hermitBody.matrixAutoUpdate = false;
+        
+        this.hermitHead = new THREE.Mesh(headGeo, mat.clone());
+        this.hermitHead.castShadow = true;
+        this.hermitHead.matrixAutoUpdate = false;
+        
+        // Pulsating point light for hermit
+        this.hermitLight = new THREE.PointLight(0xff6600, 2.0, 8, 2);
+        this.hermitLight.position.set(0, 0, 0);
+        this.hermitLight.castShadow = false;
+        
+        // Start invisible (will be enabled when hermitActive = true)
+        this.hermitBody.visible = false;
+        this.hermitHead.visible = false;
+        this.hermitLight.visible = false;
+        
+        this.scene.add(this.hermitBody, this.hermitHead, this.hermitLight);
+    }
+
     onResize() {
         this.W = window.innerWidth;
         this.H = window.innerHeight;
@@ -324,6 +360,53 @@ export class Renderer {
 
         // Player invincibility flicker
         this.pGroup.visible = invTimer <= 0 || Math.floor(invTimer * 9) % 2 === 0;
+
+        // ── Apply Hermit (Отщепенец) Matrix ──
+        const hermitActive = this.views.state[21];  // 0/1
+        const hermitX = this.views.state[22];
+        const hermitZ = this.views.state[23];
+        
+        if (hermitActive > 0) {
+            // Hermit is visible
+            this.hermitBody.visible = true;
+            this.hermitHead.visible = true;
+            this.hermitLight.visible = true;
+            
+            // Hermit animation: bobbing and scaling
+            const hermitBobPhase = performance.now() * 0.002 + hermitX * 0.1;
+            const hermitBob = Math.sin(hermitBobPhase * 4.2) * 0.08;
+            const hermitPulse = 0.9 + Math.sin(hermitBobPhase * 6.0) * 0.15;
+            
+            // Build matrices (use composeMatrix if available, otherwise manual)
+            const bodySc = hermitPulse;
+            const headSc = hermitPulse * 1.0;
+            
+            // Simple manual matrix composition for hermit
+            const bodyMat = new THREE.Matrix4();
+            bodyMat.compose(
+                new THREE.Vector3(hermitX, 0.35, hermitZ),
+                new THREE.Quaternion(),
+                new THREE.Vector3(bodySc, bodySc, bodySc)
+            );
+            this.hermitBody.matrix.copy(bodyMat);
+            
+            const headMat = new THREE.Matrix4();
+            headMat.compose(
+                new THREE.Vector3(hermitX, 0.90 + hermitBob, hermitZ),
+                new THREE.Quaternion(),
+                new THREE.Vector3(headSc, headSc, headSc)
+            );
+            this.hermitHead.matrix.copy(headMat);
+            
+            // Update light position and intensity (pulse)
+            this.hermitLight.position.set(hermitX, 0.7, hermitZ);
+            this.hermitLight.intensity = 1.5 + Math.sin(hermitBobPhase * 3.0) * 0.7;
+        } else {
+            // Hermit not active
+            this.hermitBody.visible = false;
+            this.hermitHead.visible = false;
+            this.hermitLight.visible = false;
+        }
 
         // ── Apply Instances ──
         // Need to strictly mark as needing update since worker overwrites buffer
@@ -404,7 +487,57 @@ export class Renderer {
         this.bobPh += dt * 0.65;
         const bob = Math.sin(this.bobPh) * 0.035;
 
-        this._target.set(px + 13, 13 + bob, pz + 13);
+        // ── INVERSION MODE: Camera Shake & Color Lerp ──
+        const shakeIntensity = this.views.state[24];  // 0.0 to SHAKE_AMPLITUDE
+        const colorBlend = this.views.state[25];      // 0.0 = normal, 1.0 = inverted
+        
+        // Camera shake (applied to position)
+        let shakePosX = 0, shakePosY = 0, shakePosZ = 0;
+        if (shakeIntensity > 0.001) {
+            const t = performance.now() * 0.001;  // Convert to seconds
+            const freq = 18.0;  // INVERSION.SHAKE_FREQUENCY
+            const amp = shakeIntensity;
+            shakePosX = Math.sin(t * freq * 2.0) * amp * 0.5;
+            shakePosY = Math.sin(t * freq * 1.3) * amp * 0.3;
+            shakePosZ = Math.cos(t * freq * 0.9) * amp * 0.5;
+        }
+        
+        // Color lerping for inverted world
+        if (colorBlend > 0.001) {
+            // Initialize color caches if needed
+            if (!this._normalFogColor) {
+                this._normalFogColor = new THREE.Color(PAL.fog);
+                this._invertedFogColor = new THREE.Color(INVERSION.COLORS.fog);
+            }
+            if (!this._normalGroundColor) {
+                this._normalGroundColor = new THREE.Color(PAL.ground);
+                this._invertedGroundColor = new THREE.Color(INVERSION.COLORS.ground);
+            }
+            if (!this._normalPlayerColor) {
+                this._normalPlayerColor = new THREE.Color(PAL.player);
+                this._invertedPlayerColor = new THREE.Color(INVERSION.COLORS.player);
+            }
+            
+            // Lerp fog and ground colors
+            this.scene.fog.color.lerpColors(this._normalFogColor, this._invertedFogColor, colorBlend);
+            this.renderer.setClearColor(this.scene.fog.color);
+            this.ground.material.color.lerpColors(this._normalGroundColor, this._invertedGroundColor, colorBlend);
+            
+            // Lerp player colors
+            this.pBody.material.color.lerpColors(this._normalPlayerColor, this._invertedPlayerColor, colorBlend);
+            this.pHead.material.color.lerpColors(this._normalPlayerColor, this._invertedPlayerColor, colorBlend);
+            this.pLArm.material.color.lerpColors(this._normalPlayerColor, this._invertedPlayerColor, colorBlend);
+            this.pRArm.material.color.lerpColors(this._normalPlayerColor, this._invertedPlayerColor, colorBlend);
+            
+            // Increase emissive intensity in inverted mode (player glows dark)
+            const emissiveIntensity = 0.75 + colorBlend * 1.05;
+            this.pBody.material.emissiveIntensity = emissiveIntensity;
+            this.pHead.material.emissiveIntensity = emissiveIntensity;
+            this.pLArm.material.emissiveIntensity = emissiveIntensity;
+            this.pRArm.material.emissiveIntensity = emissiveIntensity;
+        }
+
+        this._target.set(px + 13 + shakePosX, 13 + bob + shakePosY, pz + 13 + shakePosZ);
         this.cam.position.lerp(this._target, 0.055);
         this.cam.lookAt(px, 0, pz);
 

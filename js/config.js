@@ -354,7 +354,52 @@ export const COMBO_SEQ = ['x', 'x', 'y'];  // X X Y sequence for helper activati
 // ✓ Affects: how player activates power-ups
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 📋 Backward-compatible exports (used by rest of codebase)
+// � INVERSION MODE MECHANICS (Encirclement → Collective)
+// ─────────────────────────────────────────────────────────────────────────────
+// When encircled 6+ seconds, enters INVERSION: different rules, aesthetic, pacing
+
+export const INVERSION = {
+    // ── Concentric Rings (за время encirclement)
+    RING_1_RADIUS: 2.2,    // Первое кольцо (минимум 8 человек)
+    RING_2_RADIUS: 4.0,    // Второе кольцо
+    RING_3_RADIUS: 5.8,    // Третье кольцо
+    RING_MIN_COUNT: 8,     // Минимум людей в кольце
+    RING_MAX_COUNT: 12,    // Максимум (случайно)
+    RING_FORM_TIME: 1.5,   // Секунды на формирование каждого кольца
+    
+    // ── Transition Animation (NORMAL→INVERTED)
+    TRANSITION_DURATION: 2.2,  // Секунды анимации перехода (тряска+окраска)
+    SHAKE_AMPLITUDE: 0.35,     // Максимальная амплитуда тряски
+    SHAKE_FREQUENCY: 18.0,     // Частота тряски (Гц)
+    
+    // ── Hermits (Отщепенцы - враги в инвертированном режиме)
+    HERMIT_SPAWN_INTERVAL_M: 65,  // Метров между "волнами" спавна отщепенцев
+    HERMIT_PER_WAVE: 3,           // Отщепенцев за волну (по одному, с интервалом)
+    HERMIT_SPAWN_MIN_DIST: 12,    // Минимальное расстояние спавна от игрока (чтобы было время заметить)
+    HERMIT_SPAWN_MAX_DIST: 18,    // Максимальное расстояние спавна
+    HERMIT_CATCH_RADIUS: 1.5,     // Радиус поимки
+    HERMIT_SPEED_MULT: 2.8,       // Скорость движения отщепенца (очень быстрый)
+    HERMIT_LIFETIME: 4.0,         // Секунд до исчезновения если не поймали
+    HERMITS_TO_RETURN: 3,         // Нужно поймать для возврата в NORMAL
+    
+    // ── Inverted World Speed
+    INVERTED_PLAYER_SPEED_MULT: 1.8,  // Игрок быстрее в инвертированном режиме
+    INVERTED_CROWD_SPEED_MULT: 2.2,   // Толпа очень быстрая, течёт как река
+    
+    // ── Inverted World Colors (Portal-style grayscale)
+    COLORS: {
+        fog:    0x8a9099,   // Серый туман Portal-style
+        ground: 0x6b7280,   // Средне-серый пол
+        crowd:  0x9aa3ad,   // Светло-серые человечки
+        player: 0x1a1f3a,   // Тёмно-синий перламутровый игрок
+        grid:   0x5a6370,   // Тёмный грид
+        ambient:0x4a5568,   // Холодный ambient
+        hermit: 0xff6600,   // Оранжевый отщепенец (контраст)
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// �📋 Backward-compatible exports (used by rest of codebase)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Legacy exports (keep for backward compatibility with existing code)
